@@ -128,5 +128,6 @@ class ListeningQuestionAnswerSubmitView(views.APIView):
         return Response({
             'success': True,
             'message': 'Listening answers submitted successfully',
-            'data': feedback_data
+            'data': feedback_data,
+            'id': result_obj.id
         })

@@ -208,7 +208,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation ou
 
     count = Results.objects.filter(user=user, type="writing").count() + 1
 
-    Results.objects.create(
+    result = Results.objects.create(
         user      = user,
         name      = f"Results of Writing Test {count}",
         score     = str(score_val),
@@ -218,4 +218,4 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation ou
         questions = tasks_data
     )
 
-    return feedback
+    return feedback, result.id

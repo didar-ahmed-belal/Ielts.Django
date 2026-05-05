@@ -110,9 +110,9 @@ class WritingResultCreateView(views.APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
                 
-        result = get_result(answers, session, request.user)
+        feedback, result_id = get_result(answers, session, request.user)
 
-        if not result:
+        if not feedback:
             return Response(
                 {"status": False, "message": "Failed to evaluate writing result"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -122,5 +122,6 @@ class WritingResultCreateView(views.APIView):
         return Response({
             "status" : True,
             "message": "Result saved successfully",
-            "result" : result
+            "id": result_id,
+            "result" : feedback
         }, status=status.HTTP_201_CREATED)

@@ -36,3 +36,6 @@ django-ckeditor
 
 # AI
 openai
+
+# PDF generation
+reportlab

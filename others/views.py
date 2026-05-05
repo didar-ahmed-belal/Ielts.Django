@@ -1,12 +1,23 @@
-from django.shortcuts import render
+import os
+import json
 from .models import *
+from openai import OpenAI
 from .serializers import *
+from datetime import timedelta
+from django.shortcuts import render
 from django.db.models import Max, FloatField
 from django.db.models.functions import Cast
 from rest_framework import generics, status, permissions, views
 from rest_framework.response import Response
 from django.utils import timezone
-from datetime import timedelta
+from django.http import HttpResponse
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
 
 # Create your views here.
@@ -258,26 +269,81 @@ class DownloadReportView(views.APIView):
         try:
             result = Results.objects.get(id=result_id, user=request.user)
             feedback = result.feedback or {}
-            
-            context = {
-                "result": result,
-                "feedback": feedback,
-                "criteria": feedback.get("criteria", {}),
-                "strengths": feedback.get("strengths", []),
-                "improvements": feedback.get("areas_for_improvement", []),
-                "summary": feedback.get("performance_breakdown", ""),
-            }
-            
-            # Returns a styled HTML that the user can "Save as PDF" from browser.
-            return render(request, 'report_template.html', context)
-            
+
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=A4,
+                rightMargin=2*cm, leftMargin=2*cm,
+                topMargin=2*cm, bottomMargin=2*cm
+            )
+
+            styles = getSampleStyleSheet()
+            title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=20, textColor=colors.HexColor('#1a1a2e'), spaceAfter=6)
+            heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=13, textColor=colors.HexColor('#4361ee'), spaceBefore=14, spaceAfter=6)
+            body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=10, leading=16, textColor=colors.HexColor('#333333'))
+            label_style = ParagraphStyle('Label', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#888888'))
+
+            story = []
+
+            # Header
+            story.append(Paragraph('IELTS Performance Report', title_style))
+            story.append(Paragraph(f'Test: {result.name}', label_style))
+            story.append(Paragraph(f'Module: {result.type.capitalize()}  |  Score: {result.score}  |  Date: {result.created_at.strftime("%B %d, %Y")}', label_style))
+            story.append(HRFlowable(width='100%', thickness=1, color=colors.HexColor('#4361ee'), spaceAfter=12))
+
+            # Summary
+            summary = feedback.get('performance_breakdown', '')
+            if summary:
+                story.append(Paragraph('Overall Summary', heading_style))
+                story.append(Paragraph(summary, body_style))
+                story.append(Spacer(1, 8))
+
+            # Criteria scores
+            criteria = feedback.get('criteria', {})
+            if criteria:
+                story.append(Paragraph('Score Breakdown', heading_style))
+                table_data = [['Criteria', 'Score']]
+                for key, val in criteria.items():
+                    table_data.append([key, str(val)])
+                t = Table(table_data, colWidths=[12*cm, 4*cm])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4361ee')),
+                    ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
+                    ('FONTSIZE',   (0,0), (-1,0), 10),
+                    ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor('#f0f4ff'), colors.white]),
+                    ('GRID',       (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
+                    ('PADDING',    (0,0), (-1,-1), 6),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 12))
+
+            # Strengths
+            strengths = feedback.get('strengths', [])
+            if strengths:
+                story.append(Paragraph('Strengths', heading_style))
+                for s in strengths:
+                    story.append(Paragraph(f'• {s}', body_style))
+                story.append(Spacer(1, 8))
+
+            # Areas for improvement
+            improvements = feedback.get('areas_for_improvement', [])
+            if improvements:
+                story.append(Paragraph('Areas for Improvement', heading_style))
+                for imp in improvements:
+                    story.append(Paragraph(f'• {imp}', body_style))
+
+            doc.build(story)
+            buffer.seek(0)
+
+            filename = f"ielts_report_{result.type}_{result.id}.pdf"
+            response = HttpResponse(buffer, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+
         except Results.DoesNotExist:
             return Response({"error": "Result not found"}, status=404)
 
-
-import os
-import json
-from openai import OpenAI
 
 class AIFeedbackView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]

@@ -145,7 +145,7 @@ class SpeakingResultView(views.APIView):
 
         # Evaluate with Gemini
         try:
-            result = get_result(
+            feedback = get_result(
                 part1_transcript=transcripts['part1'],
                 part2_transcript=transcripts['part2'],
                 part3_transcript=transcripts['part3'],
@@ -159,20 +159,21 @@ class SpeakingResultView(views.APIView):
 
         # Save result to the unified Results table
         count = Results.objects.filter(user=request.user, type='speaking').count() + 1
-        Results.objects.create(
+        result = Results.objects.create(
             user      = request.user,
             name      = f"Results of Speaking Test {count}",
-            score     = str(result.get('overall_band_score', '0.0')),
+            score     = str(feedback.get('overall_band_score', '0.0')),
             type      = 'speaking',
             questions = questions,
             answers   = transcripts,
-            feedback  = result,
+            feedback  = feedback,
         )
 
         return Response({
             'status': True,
             'message': 'Speaking evaluated successfully',
             'transcripts': transcripts,
-            'result': result,
-        })
+            'id': result.id,
+            'result': feedback,
+        }, status=status.HTTP_201_CREATED)
 
