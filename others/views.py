@@ -19,12 +19,25 @@ from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from listening.models import Question as ListeningQuestion
+from listening.models import Question as ListeningQuestion, ListeningTask
 from reading.models import ReadingQuestion, QuestionSet
 from writing.models import WritingQuestion
 from django.contrib.auth import get_user_model
 User = get_user_model()
+from reading.utils import create_question_set as reading_question_set
+from speaking.utils import generate_speaking_questions as speaking_question_set
 
+from listening.serializers import ListeningTaskSerializer
+from writing.serializers import WritingQuestionSerializer
+from reading.serializers import QuestionSetSerializer as ReadingQuestionSetSerializer
+from .serializers import MockTaskSerializer
+
+# Evaluation functions
+from listening.utils import get_result as listening_eval
+from reading.utils import get_result as reading_eval
+from writing.utils import get_result as writing_eval
+from speaking.utils import get_result as speaking_eval, get_transcript
+from concurrent.futures import ThreadPoolExecutor
 
 # Create your views here.
 
@@ -287,6 +300,7 @@ class DownloadReportView(views.APIView):
             styles = getSampleStyleSheet()
             title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=20, textColor=colors.HexColor('#1a1a2e'), spaceAfter=6)
             heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=13, textColor=colors.HexColor('#4361ee'), spaceBefore=14, spaceAfter=6)
+            subheading_style = ParagraphStyle('Subheading', parent=styles['Heading3'], fontSize=11, textColor=colors.HexColor('#2d3436'), spaceBefore=8, spaceAfter=4)
             body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=10, leading=16, textColor=colors.HexColor('#333333'))
             label_style = ParagraphStyle('Label', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#888888'))
 
@@ -295,49 +309,79 @@ class DownloadReportView(views.APIView):
             # Header
             story.append(Paragraph('IELTS Performance Report', title_style))
             story.append(Paragraph(f'Test: {result.name}', label_style))
-            story.append(Paragraph(f'Module: {result.type.capitalize()}  |  Score: {result.score}  |  Date: {result.created_at.strftime("%B %d, %Y")}', label_style))
+            story.append(Paragraph(f'Date: {result.created_at.strftime("%B %d, %Y")}  |  Overall Band: {result.score}', label_style))
             story.append(HRFlowable(width='100%', thickness=1, color=colors.HexColor('#4361ee'), spaceAfter=12))
 
-            # Summary
-            summary = feedback.get('performance_breakdown', '')
-            if summary:
-                story.append(Paragraph('Overall Summary', heading_style))
-                story.append(Paragraph(summary, body_style))
-                story.append(Spacer(1, 8))
-
-            # Criteria scores
-            criteria = feedback.get('criteria', {})
-            if criteria:
-                story.append(Paragraph('Score Breakdown', heading_style))
-                table_data = [['Criteria', 'Score']]
-                for key, val in criteria.items():
-                    table_data.append([key, str(val)])
-                t = Table(table_data, colWidths=[12*cm, 4*cm])
+            if result.type == 'mock':
+                # --- MOCK TEST REPORT ---
+                story.append(Paragraph('Mock Exam Module Summary', heading_style))
+                table_data = [['Module', 'Score']]
+                for mod in ['listening', 'reading', 'writing', 'speaking']:
+                    m_data = feedback.get(mod, {})
+                    table_data.append([mod.capitalize(), str(m_data.get('score', '0.0'))])
+                
+                table_data.append(['OVERALL BAND', str(result.score)])
+                
+                t = Table(table_data, colWidths=[10*cm, 6*cm])
                 t.setStyle(TableStyle([
                     ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4361ee')),
                     ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
-                    ('FONTSIZE',   (0,0), (-1,0), 10),
-                    ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor('#f0f4ff'), colors.white]),
-                    ('GRID',       (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
-                    ('PADDING',    (0,0), (-1,-1), 6),
+                    ('ALIGN', (1,0), (1,-1), 'CENTER'),
+                    ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+                    ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#f0f4ff')),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
+                    ('PADDING', (0,0), (-1,-1), 8),
                 ]))
                 story.append(t)
-                story.append(Spacer(1, 12))
+                story.append(Spacer(1, 15))
 
-            # Strengths
-            strengths = feedback.get('strengths', [])
-            if strengths:
-                story.append(Paragraph('Strengths', heading_style))
-                for s in strengths:
-                    story.append(Paragraph(f'• {s}', body_style))
-                story.append(Spacer(1, 8))
+                # Module Details
+                story.append(Paragraph('Module Performance Analysis', heading_style))
+                for mod in ['listening', 'reading', 'writing', 'speaking']:
+                    m_data = feedback.get(mod, {})
+                    summary = m_data.get('performance_breakdown') or m_data.get('feedback')
+                    if summary:
+                        story.append(Paragraph(mod.capitalize(), subheading_style))
+                        story.append(Paragraph(str(summary), body_style))
+                        story.append(Spacer(1, 5))
 
-            # Areas for improvement
-            improvements = feedback.get('areas_for_improvement', [])
-            if improvements:
-                story.append(Paragraph('Areas for Improvement', heading_style))
-                for imp in improvements:
-                    story.append(Paragraph(f'• {imp}', body_style))
+            else:
+                # --- STANDARD SINGLE MODULE REPORT ---
+                summary = feedback.get('performance_breakdown', '')
+                if summary:
+                    story.append(Paragraph('Overall Summary', heading_style))
+                    story.append(Paragraph(summary, body_style))
+                    story.append(Spacer(1, 8))
+
+                criteria = feedback.get('criteria', {})
+                if criteria:
+                    story.append(Paragraph('Score Breakdown', heading_style))
+                    table_data = [['Criteria', 'Score']]
+                    for key, val in criteria.items():
+                        table_data.append([key, str(val)])
+                    t = Table(table_data, colWidths=[12*cm, 4*cm])
+                    t.setStyle(TableStyle([
+                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4361ee')),
+                        ('TEXTCOLOR',  (0,0), (-1,0), colors.white),
+                        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.HexColor('#f0f4ff'), colors.white]),
+                        ('GRID',       (0,0), (-1,-1), 0.5, colors.HexColor('#cccccc')),
+                        ('PADDING',    (0,0), (-1,-1), 6),
+                    ]))
+                    story.append(t)
+                    story.append(Spacer(1, 12))
+
+                strengths = feedback.get('strengths', [])
+                if strengths:
+                    story.append(Paragraph('Strengths', heading_style))
+                    for s in strengths:
+                        story.append(Paragraph(f'• {s}', body_style))
+                    story.append(Spacer(1, 8))
+
+                improvements = feedback.get('areas_for_improvement', [])
+                if improvements:
+                    story.append(Paragraph('Areas for Improvement', heading_style))
+                    for imp in improvements:
+                        story.append(Paragraph(f'• {imp}', body_style))
 
             doc.build(story)
             buffer.seek(0)
@@ -383,80 +427,113 @@ class AIFeedbackView(views.APIView):
                     "data": result.feedback["detailed_analysis"]
                 })
 
-            # Prepare data for AI — sanitize answers at code level first
-            raw_answers = result.answers or {}
-            sanitized_answers = {}
-            for k, v in raw_answers.items():
-                if v is None or (isinstance(v, str) and not v.strip()):
-                    sanitized_answers[k] = "[NO ANSWER PROVIDED]"
-                elif isinstance(v, dict):
-                    # For writing tasks: check the user_answer field inside
-                    sanitized_v = dict(v)
-                    inner = v.get('user_answer', '')
-                    if inner is None or (isinstance(inner, str) and not inner.strip()):
-                        sanitized_v['user_answer'] = "[NO ANSWER PROVIDED]"
-                    sanitized_answers[k] = sanitized_v
-                else:
-                    sanitized_answers[k] = v
+            if result.type == 'mock':
+                # --- MOCK TEST ANALYSIS ---
+                test_data = {
+                    "overall_score": result.score,
+                    "module_scores": {
+                        "listening": result.feedback.get('listening', {}).get('score'),
+                        "reading": result.feedback.get('reading', {}).get('score'),
+                        "writing": result.feedback.get('writing', {}).get('score'),
+                        "speaking": result.feedback.get('speaking', {}).get('score'),
+                    },
+                    "module_feedbacks": {
+                        "listening": result.feedback.get('listening', {}).get('performance_breakdown'),
+                        "reading": result.feedback.get('reading', {}).get('performance_breakdown'),
+                        "writing": result.feedback.get('writing', {}).get('performance_breakdown'),
+                        "speaking": result.feedback.get('speaking', {}).get('performance_breakdown'),
+                    },
+                    # We pass a summary of answers to keep it fast
+                    "writing_tasks": result.answers.get('writing', {}),
+                    "speaking_transcripts": result.answers.get('speaking', {})
+                }
 
-            test_data = {
-                "type": result.type,
-                "score": result.score,
-                "questions": result.questions,
-                "user_answers": sanitized_answers,
-            }
+                prompt = f"""
+                You are a Senior IELTS Examiner. Analyze this FULL MOCK EXAM result.
+                Overall Band: {result.score}
+                
+                Data: {json.dumps(test_data, indent=2)}
 
-            prompt = f"""
-            You are an expert IELTS examiner. Analyze the following student test result and provide a deep-dive performance analysis.
-            Test Type: {result.type}
-            Overall Score/Band: {result.score}
+                Provide a comprehensive, high-speed analysis in JSON format:
+                {{
+                    "overall_summary": "Overall evaluation of the student's readiness for the real exam.",
+                    "module_analysis": {{
+                        "listening": "Quick take on listening accuracy and focus.",
+                        "reading": "Quick take on reading comprehension and speed.",
+                        "writing": "Analysis of writing tasks, grammar, and coherence.",
+                        "speaking": "Analysis of fluency, pronunciation, and vocabulary."
+                    }},
+                    "analysis": [
+                        {{
+                            "question": "Critical weakness identified",
+                            "status": "incorrect",
+                            "student_answer": "...",
+                            "correct_answer": "...",
+                            "explanation": "Explain a major pattern of error found across the test.",
+                            "examiner_tip": "Advice to fix this pattern."
+                        }}
+                    ],
+                    "action_plan": ["Step 1", "Step 2", "Step 3"]
+                }}
+                """
+            else:
+                # --- STANDARD SINGLE MODULE ANALYSIS ---
+                raw_answers = result.answers or {}
+                sanitized_answers = {}
+                for k, v in raw_answers.items():
+                    if v is None or (isinstance(v, str) and not v.strip()):
+                        sanitized_answers[k] = "[NO ANSWER PROVIDED]"
+                    elif isinstance(v, dict):
+                        sanitized_v = dict(v)
+                        inner = v.get('user_answer', '')
+                        if inner is None or (isinstance(inner, str) and not inner.strip()):
+                            sanitized_v['user_answer'] = "[NO ANSWER PROVIDED]"
+                        sanitized_answers[k] = sanitized_v
+                    else:
+                        sanitized_answers[k] = v
 
-            For each question (especially incorrect ones):
-            1. Identify the question number/identifier.
-            2. Evaluate the student's answer.
-            3. If wrong, explain precisely what led to the mistake (e.g., misinterpretation of a keyword, missing a detail in the passage, grammatical error).
-            4. Provide the correct answer and the rationale behind it.
-            5. Give a targeted "Examiner Tip" on how to avoid this specific error in the future.
+                test_data = {
+                    "type": result.type,
+                    "score": result.score,
+                    "questions": result.questions,
+                    "user_answers": sanitized_answers,
+                }
 
-            RULES — follow these strictly:
-            1. Any answer labeled "[NO ANSWER PROVIDED]" means the student gave absolutely no response. You MUST mark it as "incorrect", set student_answer to "No answer provided", and state clearly in the explanation that the student did not answer. Do NOT invent, guess, or fabricate any answer.
-            2. Only base your analysis on what is literally in the data below. Do not hallucinate.
-            3. Be 100% honest — act as a strict, fair teacher, not a generous one.
+                prompt = f"""
+                You are an expert IELTS examiner. Analyze the following student test result and provide a deep-dive performance analysis.
+                Test Type: {result.type}
+                Overall Score/Band: {result.score}
 
-            Student Data:
-            {json.dumps(test_data, indent=2)}
+                For each question (especially incorrect ones):
+                1. Identify the question number/identifier.
+                2. Evaluate the student's answer.
+                3. If wrong, explain precisely what led to the mistake.
+                4. Provide the correct answer and rationale.
+                5. Give a targeted "Examiner Tip".
 
-            Return the response as a structured JSON object with this exact structure:
-            {{
-                "overall_summary": "A 2-3 sentence summary of overall performance from an examiner's perspective.",
-                "analysis": [
-                    {{
-                        "question": "Question text or number",
-                        "status": "correct/incorrect",
-                        "student_answer": "...",
-                        "correct_answer": "...",
-                        "explanation": "Detailed explanation of the mistake or why it was correct.",
-                        "examiner_tip": "Specific advice to improve."
-                    }}
-                ],
-                "action_plan": [
-                    "3-5 concrete steps the student should take to reach a higher band score."
-                ]
-            }}
-            """
+                Student Data:
+                {json.dumps(test_data, indent=2)}
+
+                Return response as JSON:
+                {{
+                    "overall_summary": "...",
+                    "analysis": [
+                        {{
+                            "question": "...",
+                            "status": "correct/incorrect",
+                            "student_answer": "...",
+                            "correct_answer": "...",
+                            "explanation": "...",
+                            "examiner_tip": "..."
+                        }}
+                    ],
+                    "action_plan": ["..."]
+                }}
+                """
 
             # Call AI
             api_key = os.getenv("OPENROUTER_API_KEY")
-            if not api_key:
-                return Response({
-                    "status": False,
-                    "error": "AI configuration missing"
-                }, status=500)
-
-            client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=api_key,
-            )
+            client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
             
             response = client.chat.completions.create(
                 model="google/gemini-2.0-flash-001",
@@ -467,25 +544,22 @@ class AIFeedbackView(views.APIView):
             raw_content = response.choices[0].message.content
             try:
                 detailed_analysis = _clean_and_parse_json(raw_content)
-            except Exception as parse_err:
-                print(f"JSON parse error in AIFeedbackView: {parse_err}")
-                print(f"Raw AI response: {raw_content[:500]}")
+                # Store it in the feedback field for future use
+                if not result.feedback:
+                    result.feedback = {}
+                result.feedback["detailed_analysis"] = detailed_analysis
+                result.save()
+                
+                return Response({
+                    "status": True,
+                    "data": detailed_analysis
+                })
+            except Exception as e:
+                print(f"Error parsing AI feedback: {e}")
                 return Response({
                     "status": False,
-                    "error": "The AI returned an invalid response. Please try again."
-                }, status=500)
-            
-            # Store it in the feedback field for future use
-            if not result.feedback:
-                result.feedback = {}
-            result.feedback["detailed_analysis"] = detailed_analysis
-            result.save()
-
-            return Response({
-                "status": True,
-                "data": detailed_analysis
-            })
-
+                    "error": "Failed to parse AI response. Please try again."
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Results.DoesNotExist:
             return Response({"error": "Result not found"}, status=404)
         except Exception as e:
@@ -525,12 +599,187 @@ class HomeData(views.APIView):
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+
             return Response({
                 "status": False,
                 "error": str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+class MockTaskSubmitView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        mock_task_id = request.data.get('task_id')
+        if not mock_task_id:
+            return Response({"status": False, "error": "task_id is required"}, status=400)
+
+        try:
+            mock_task = MockTask.objects.get(id=mock_task_id, user=request.user)
+        except MockTask.DoesNotExist:
+            return Response({"status": False, "error": "Mock task not found"}, status=404)
+
+        if mock_task.completed:
+            return Response({"status": False, "error": "Mock task already submitted"}, status=400)
+
+        # Retrieve answers from request
+        l_answers = request.data.get('listening_answers', {})
+        r_answers = request.data.get('reading_answers', {})
+        w_answers = request.data.get('writing_answers', {})
+        # Speaking Audio Files
+        part1_audio = request.FILES.get('speaking_part1')
+        part2_audio = request.FILES.get('speaking_part2')
+        part3_audio = request.FILES.get('speaking_part3')
+
+        try:
+            # 1. Listening Evaluation
+            l_set_id = mock_task.l_set.get('id') if mock_task.l_set else None
+            l_feedback = listening_eval(l_set_id, l_answers) if l_set_id else {"score": 0, "error": "No listening task"}
+            l_score = float(l_feedback.get('score', 0))
+
+            # 2. Reading Evaluation
+            r_set_id = mock_task.r_set.get('id') if mock_task.r_set else None
+            r_feedback = reading_eval(r_set_id, r_answers) if r_set_id else {"score": 0, "error": "No reading task"}
+            r_score = float(r_feedback.get('score', 0))
+
+            # 3. Writing Evaluation
+            w_ids = [q.get('id') for q in mock_task.w_set] if mock_task.w_set else []
+            w_instances = WritingQuestion.objects.filter(id__in=w_ids)
+            # writing_eval returns (feedback, result_id)
+            w_feedback, _ = writing_eval(w_answers, w_instances, request.user) if w_instances.exists() else ({"score": 0}, None)
+            w_score = float(w_feedback.get('score', 0))
+
+            # 4. Speaking Evaluation (Transcribe first, then eval)
+            s_set = mock_task.s_set or {}
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                f1 = executor.submit(get_transcript, part1_audio) if part1_audio else None
+                f2 = executor.submit(get_transcript, part2_audio) if part2_audio else None
+                f3 = executor.submit(get_transcript, part3_audio) if part3_audio else None
+                
+                t1 = f1.result() if f1 else "[NO ANSWER PROVIDED]"
+                t2 = f2.result() if f2 else "[NO ANSWER PROVIDED]"
+                t3 = f3.result() if f3 else "[NO ANSWER PROVIDED]"
+
+            s_feedback = speaking_eval(t1, t2, t3, s_set) if s_set else {"score": 0}
+            s_score = float(s_feedback.get('score', 0))
+
+            # Calculate Overall Band Score (standard IELTS rounding: nearest 0.5)
+            # Average the 4 scores, multiply by 2, round to nearest integer, divide by 2
+            overall_band = round((l_score + r_score + w_score + s_score) / 4 * 2) / 2
+
+            # Create the Unified Mock Result
+            mock_result = Results.objects.create(
+                user=request.user,
+                name=f"Full Mock Test Results - {timezone.now().strftime('%Y-%m-%d')}",
+                score=str(overall_band),
+                type='mock',
+                questions={
+                    "listening": mock_task.l_set,
+                    "reading": mock_task.r_set,
+                    "writing": mock_task.w_set,
+                    "speaking": mock_task.s_set
+                },
+                answers={
+                    "listening": l_answers,
+                    "reading": r_answers,
+                    "writing": w_answers,
+                    "speaking": s_answers
+                },
+                feedback={
+                    "overall_score": overall_band,
+                    "listening": l_feedback,
+                    "reading": r_feedback,
+                    "writing": w_feedback,
+                    "speaking": s_feedback
+                }
+            )
+
+            mock_task.completed = True
+            mock_task.save()
+
+            return Response({
+                "status": True,
+                "message": "Full mock test submitted successfully",
+                "result_id": str(mock_result.id),
+                "overall_score": overall_band,
+                "feedback": mock_result.feedback
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return Response({
+                "status": False,
+                "error": f"Evaluation failed: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+class GetMockTask(views.APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        user = request.user
+        # Plan check
+        # if user.subscriptions.filter(plan__name="free").exists():
+        #     return Response({
+        #         "status": False,
+        #         "error": "Upgrade your plan to access this feature"
+        #     }, status=status.HTTP_403_FORBIDDEN)
             
+        try:
+            mock_task = MockTask.objects.filter(user=request.user, completed=False).first()
+
+            if not mock_task:
+                # 1. Listening
+                l_instance = ListeningTask.objects.order_by('?').first()
+                l_data = ListeningTaskSerializer(l_instance,context={'request': request}).data if l_instance else None
+                
+                # 2. Reading
+                r_instance = reading_question_set()
+                r_data = ReadingQuestionSetSerializer(r_instance,context={'request': request}).data if r_instance else None
+                
+                # 3. Writing
+                queryset = WritingQuestion.objects.all()
+                task1 = queryset.filter(level=1).order_by('?').first()
+                task2 = queryset.filter(level=2).order_by('?').first()
+                w_questions = [q for q in [task1, task2] if q is not None]
+                w_data = WritingQuestionSerializer(w_questions, many=True,context={'request': request}).data
+                
+                # 4. Speaking
+                s_data = speaking_question_set()
+
+                mock_task = MockTask.objects.create(
+                    user=request.user,
+                    l_set=l_data,
+                    r_set=r_data,
+                    w_set=w_data,
+                    s_set=s_data,
+                )
+
+            if not mock_task:
+                return Response({
+                    "status": False,
+                    "error": "Failed to create mock task"
+                }, status=status.HTTP_404_NOT_FOUND)
             
-    
+            data = MockTaskSerializer(mock_task, context={'request': request}).data
+            rem_time = mock_task.remaining_time()
+            data['remaining_time'] = int(rem_time.total_seconds()) if rem_time.total_seconds() > 0 else 0
+
+            return Response({
+                "status": True,
+                "message": "Mock task fetched successfully",
+                "data": data
+            }, status=status.HTTP_200_OK)
             
-    
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return Response({
+                "status": False,
+                "error": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

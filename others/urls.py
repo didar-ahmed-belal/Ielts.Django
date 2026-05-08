@@ -13,4 +13,6 @@ urlpatterns = [
     path('report/<uuid:result_id>/', DownloadReportView.as_view(), name='download_report'),
     path('ai-feedback/<uuid:result_id>/', AIFeedbackView.as_view(), name='ai_feedback'),
     path('home-data/', HomeData.as_view(), name='home_data'),
+    path('mock-task/', GetMockTask.as_view(), name='get_mock_task'),
+    path('mock-task/submit/', MockTaskSubmitView.as_view(), name='submit_mock_task'),
 ]

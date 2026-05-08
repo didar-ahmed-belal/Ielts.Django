@@ -38,16 +38,31 @@ def _load_image_base64(image_field):
 
 
 def get_result(answers, session, user):
+    import uuid
+    from django.db.models.query import QuerySet
 
     if isinstance(session, (str, uuid.UUID)):
         session = WritingTask.objects.get(id=session)
+        tasks = list(session.question.all().order_by('level'))
+    elif isinstance(session, (list, QuerySet)):
+        tasks = list(session)
+    else:
+        tasks = list(session.question.all().order_by('level'))
 
-    # Use the session to get the linked questions
-    tasks = list(session.question.all().order_by('level'))
     task_ids = [str(t.id) for t in tasks]
 
     if isinstance(answers, dict):
-        answers_list = [answers[k] for k in sorted(answers.keys(), key=lambda x: int(x))]
+        # Sort keys naturally (e.g., '1', '2' or 'task1', 'task2')
+        def try_int(s):
+            try:
+                # Remove non-digits if necessary, or just try to parse the whole string
+                digits = ''.join(filter(str.isdigit, s))
+                return int(digits) if digits else s
+            except:
+                return s
+        
+        sorted_keys = sorted(answers.keys(), key=try_int)
+        answers_list = [answers[k] for k in sorted_keys]
     elif isinstance(answers, list):
         answers_list = answers
     else:

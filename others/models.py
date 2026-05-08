@@ -58,6 +58,7 @@ class Results(models.Model):
         ('writing', 'Writing'),
         ('listening', 'Listening'),
         ('speaking', 'Speaking'),
+        ('mock', 'Mock')
     )
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -113,3 +114,25 @@ class FAQ(models.Model):
     def __str__(self):
         return self.title
     
+
+
+
+
+class MockTask(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mock_tasks')
+    l_set = models.JSONField(blank=True, null=True)
+    r_set = models.JSONField(blank=True, null=True)
+    w_set = models.JSONField(blank=True, null=True)
+    s_set = models.JSONField(blank=True, null=True)
+    completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.user.email
+    
+    def remaining_time(self):
+        return self.created_at + timedelta(minutes=180) - timezone.now()
+    
+        
