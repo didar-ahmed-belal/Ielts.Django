@@ -25,7 +25,7 @@ def create_checkout_session(request, payment , price ):
                 "quantity": 1 ,
             }
         ],
-        "success_url": request.build_absolute_uri(reverse("payment_success")),
+        "success_url": request.build_absolute_uri(reverse("payment_success") + f"?id={payment.id}&session_id={{CHECKOUT_SESSION_ID}}"),
         "cancel_url": request.build_absolute_uri(reverse("payment_cancel")),
         "invoice_creation": {
             "enabled": True,

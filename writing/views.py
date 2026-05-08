@@ -53,35 +53,44 @@ class GetWritingTaskView(views.APIView):
                     "status": False,
                     "message": f"You have completed {limit} free writing tasks. Please upgrade your plan to continue."
                 }, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            task = Task.objects.get(user=request.user, module='writing', completed=False)
-            session = WritingTask.objects.get(id=task.question)
-            serializer = WritingTaskSerializer(session, context={'request': request, 'task': task})
-            return Response({
-                "status": True,
-                "message": "Writing task session retrieved successfully",
-                "data": serializer.data
-            }, status=status.HTTP_200_OK)
-        except Task.DoesNotExist:
-            queryset = WritingQuestion.objects.all()
-            task1 = queryset.filter(level=1).order_by('?').first()
-            task2 = queryset.filter(level=2).order_by('?').first()
-            
-            questions = [q for q in [task1, task2] if q is not None]
-            
-            # Create a session (WritingTask)
-            session = WritingTask.objects.create()
-            session.question.set(questions)
+        # Clean up any duplicate incomplete tasks (safety net)
+        tasks = Task.objects.filter(user=request.user, module='writing', completed=False)
+        task_count = tasks.count()
+        if task_count > 1:
+            latest = tasks.order_by('-created_at').first()
+            tasks.exclude(id=latest.id).delete()
+            task = latest
+        elif task_count == 1:
+            task = tasks.first()
+        else:
+            task = None
 
-            task = Task.objects.create(user=request.user, module='writing', question=session.id, completed=False)
+        if task:
+            try:
+                session = WritingTask.objects.get(id=task.question)
+                serializer = WritingTaskSerializer(session, context={'request': request, 'task': task})
+                return Response({
+                    "status": True,
+                    "message": "Writing task session retrieved successfully",
+                    "data": serializer.data
+                }, status=status.HTTP_200_OK)
+            except WritingTask.DoesNotExist:
+                task.delete()
 
-            serializer = WritingTaskSerializer(session, context={'request': request, 'task': task})
-            
-            return Response({
-                "status": True,
-                "message": "Writing task session created successfully",
-                "data": serializer.data
-            }, status=status.HTTP_200_OK)
+        # No valid task — create a new one
+        queryset = WritingQuestion.objects.all()
+        task1 = queryset.filter(level=1).order_by('?').first()
+        task2 = queryset.filter(level=2).order_by('?').first()
+        questions = [q for q in [task1, task2] if q is not None]
+        session = WritingTask.objects.create()
+        session.question.set(questions)
+        task = Task.objects.create(user=request.user, module='writing', question=session.id, completed=False)
+        serializer = WritingTaskSerializer(session, context={'request': request, 'task': task})
+        return Response({
+            "status": True,
+            "message": "Writing task session created successfully",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
 
 
 

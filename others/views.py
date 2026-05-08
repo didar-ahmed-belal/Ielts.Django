@@ -3,6 +3,7 @@ import json
 from .models import *
 from openai import OpenAI
 from .serializers import *
+from .models import *
 from datetime import timedelta
 from django.shortcuts import render
 from django.db.models import Max, FloatField
@@ -18,6 +19,11 @@ from reportlab.lib.units import cm
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from listening.models import Question as ListeningQuestion
+from reading.models import ReadingQuestion, QuestionSet
+from writing.models import WritingQuestion
+from django.contrib.auth import get_user_model
+User = get_user_model()
 
 
 # Create your views here.
@@ -345,6 +351,24 @@ class DownloadReportView(views.APIView):
             return Response({"error": "Result not found"}, status=404)
 
 
+import re
+
+def _clean_and_parse_json(raw: str) -> dict:
+    """Robustly parse AI JSON responses that may include markdown fences or trailing commas."""
+    text = raw.strip()
+    # Strip markdown code fences
+    if text.startswith('```'):
+        lines = text.split('\n')
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:] if lines[0].startswith('```') else lines
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+    # Remove trailing commas before } or ] (common AI mistake)
+    text = re.sub(r',\s*(\}|\])', r'\1', text)
+    return json.loads(text)
+
+
 class AIFeedbackView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -359,12 +383,27 @@ class AIFeedbackView(views.APIView):
                     "data": result.feedback["detailed_analysis"]
                 })
 
-            # Prepare data for AI
+            # Prepare data for AI — sanitize answers at code level first
+            raw_answers = result.answers or {}
+            sanitized_answers = {}
+            for k, v in raw_answers.items():
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    sanitized_answers[k] = "[NO ANSWER PROVIDED]"
+                elif isinstance(v, dict):
+                    # For writing tasks: check the user_answer field inside
+                    sanitized_v = dict(v)
+                    inner = v.get('user_answer', '')
+                    if inner is None or (isinstance(inner, str) and not inner.strip()):
+                        sanitized_v['user_answer'] = "[NO ANSWER PROVIDED]"
+                    sanitized_answers[k] = sanitized_v
+                else:
+                    sanitized_answers[k] = v
+
             test_data = {
                 "type": result.type,
                 "score": result.score,
                 "questions": result.questions,
-                "user_answers": result.answers,
+                "user_answers": sanitized_answers,
             }
 
             prompt = f"""
@@ -378,6 +417,11 @@ class AIFeedbackView(views.APIView):
             3. If wrong, explain precisely what led to the mistake (e.g., misinterpretation of a keyword, missing a detail in the passage, grammatical error).
             4. Provide the correct answer and the rationale behind it.
             5. Give a targeted "Examiner Tip" on how to avoid this specific error in the future.
+
+            RULES — follow these strictly:
+            1. Any answer labeled "[NO ANSWER PROVIDED]" means the student gave absolutely no response. You MUST mark it as "incorrect", set student_answer to "No answer provided", and state clearly in the explanation that the student did not answer. Do NOT invent, guess, or fabricate any answer.
+            2. Only base your analysis on what is literally in the data below. Do not hallucinate.
+            3. Be 100% honest — act as a strict, fair teacher, not a generous one.
 
             Student Data:
             {json.dumps(test_data, indent=2)}
@@ -420,7 +464,16 @@ class AIFeedbackView(views.APIView):
                 response_format={ "type": "json_object" }
             )
             
-            detailed_analysis = json.loads(response.choices[0].message.content)
+            raw_content = response.choices[0].message.content
+            try:
+                detailed_analysis = _clean_and_parse_json(raw_content)
+            except Exception as parse_err:
+                print(f"JSON parse error in AIFeedbackView: {parse_err}")
+                print(f"Raw AI response: {raw_content[:500]}")
+                return Response({
+                    "status": False,
+                    "error": "The AI returned an invalid response. Please try again."
+                }, status=500)
             
             # Store it in the feedback field for future use
             if not result.feedback:
@@ -441,3 +494,43 @@ class AIFeedbackView(views.APIView):
                 "status": False,
                 "error": "Failed to generate detailed feedback. Please try again later."
             }, status=500)
+
+
+
+
+class HomeData(views.APIView):
+    permission_classes = [permissions.AllowAny]
+    def get(self, request):
+        try:
+            l_count = ListeningQuestion.objects.count()
+            r_count = ReadingQuestion.objects.count()
+            w_count = WritingQuestion.objects.count()
+            total_question_sets = QuestionSet.objects.count()
+
+            total_questions_count = l_count + r_count + w_count + total_question_sets
+            
+            data = {
+                "total_questions": f"{total_questions_count}+",
+                "listening_questions": l_count,
+                "reading_questions": r_count,
+                "writing_questions": w_count,
+                "speaking_questions": "Unlimited (AI Generated)",
+                "total_users": User.objects.count(),
+                "total_tests_taken": total_question_sets
+            }
+            
+            return Response({
+                "status": True,
+                "data": data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "status": False,
+                "error": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            
+    
+            
+    

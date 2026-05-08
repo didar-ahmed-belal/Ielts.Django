@@ -4,6 +4,23 @@ import json
 import mimetypes
 import base64
 from openai import OpenAI
+import re
+
+def _clean_and_parse_json(raw: str) -> dict:
+    """Robustly parse AI JSON responses that may include markdown fences or trailing commas."""
+    text = raw.strip()
+    # Strip markdown code fences
+    if text.startswith('```'):
+        lines = text.split('\n')
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:] if lines[0].startswith('```') else lines
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+    # Remove trailing commas before } or ] (common AI mistake)
+    text = re.sub(r',\s*(\}|\])', r'\1', text)
+    return json.loads(text)
+
 from others.models import Results
 
 
@@ -41,7 +58,13 @@ def get_result(answers, session, user):
     answers_for_db = {}   
 
     for i, task in enumerate(tasks):
-        user_answer = answers_list[i] if i < len(answers_list) else ""
+        raw_answer = answers_list[i] if i < len(answers_list) else ""
+
+        # Normalize blank answers at code level
+        if not isinstance(raw_answer, str) or not raw_answer.strip():
+            user_answer = "[NO ANSWER PROVIDED]"
+        else:
+            user_answer = raw_answer.strip()
 
         answers_for_db[str(task.id)] = {
             "task_title"   : task.title,
@@ -85,11 +108,18 @@ def get_result(answers, session, user):
         if image_parts else ""
     )
 
+    blank_tasks = [i+1 for i, sec in enumerate(task_sections) if "[NO ANSWER PROVIDED]" in sec]
+
     prompt_text = f"""You are an expert IELTS Writing examiner.
 {graph_note}
 A student has submitted the following IELTS Writing test responses:
 
 {combined_tasks}
+
+RULES — follow these strictly:
+1. Any task showing "[NO ANSWER PROVIDED]" means the student gave NO response. You MUST score that task 0 (band score 0) and state clearly in the feedback that no answer was provided. Do NOT imagine or fabricate any content.
+2. Only evaluate what is literally written above. Do not infer, guess, or hallucinate missing content.
+3. Overall score must honestly reflect all tasks including unanswered ones.
 
 Evaluate the student's responses based on official IELTS Writing band descriptors and return a structured JSON feedback report.
 Return ONLY valid JSON with this exact structure (no markdown, no explanation outside the JSON):
@@ -152,7 +182,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation ou
             response_format={ "type": "json_object" }
         )
         raw_text = response.choices[0].message.content.strip()
-        feedback = json.loads(raw_text)
+        feedback = _clean_and_parse_json(response.choices[0].message.content)
 
     except Exception as e:
         print("Gemini API error in writing get_result:", e)

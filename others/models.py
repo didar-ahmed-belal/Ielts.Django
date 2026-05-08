@@ -40,6 +40,16 @@ class Task(models.Model):
     def remaining_time(self):
         return self.created_at + timedelta(minutes=60) - timezone.now()
 
+    class Meta:
+        # Prevent duplicate active tasks for the same user+module+question
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'module', 'question'],
+                condition=models.Q(completed=False),
+                name='unique_active_task_per_user_module_question'
+            )
+        ]
+
 
 
 class Results(models.Model):

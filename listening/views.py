@@ -43,8 +43,20 @@ class ListeningTaskDetailView(views.APIView):
                     "message": f"You have completed {limit} free listening tasks. Please upgrade your plan to continue."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            task = Task.objects.get(user=request.user, module='listening', completed=False)
+        # Clean up any duplicate incomplete tasks (shouldn't exist, but safety net)
+        tasks = Task.objects.filter(user=request.user, module='listening', completed=False)
+        task_count = tasks.count()
+        if task_count > 1:
+            # Keep the most recent, delete the rest
+            latest = tasks.order_by('-created_at').first()
+            tasks.exclude(id=latest.id).delete()
+            task = latest
+        elif task_count == 1:
+            task = tasks.first()
+        else:
+            task = None
+
+        if task:
             try:
                 listening_task = ListeningTask.objects.get(id=task.question)
                 serializer = ListeningTaskSerializer(listening_task, context={'task': task, "request": request})
@@ -56,8 +68,6 @@ class ListeningTaskDetailView(views.APIView):
             except ListeningTask.DoesNotExist:
                 # If the underlying listening task was deleted, remove the stale task session
                 task.delete()
-        except Task.DoesNotExist:
-            pass
 
         # If no active session exists (or one was just deleted), start a new one
         listening_task = ListeningTask.objects.order_by('?').first()
@@ -94,15 +104,24 @@ class ListeningQuestionAnswerSubmitView(views.APIView):
                 'message': 'Task ID and answers are required'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            task_session = Task.objects.get(user=request.user, module='listening', question=task_id)
-            task_session.completed = True
-            task_session.save()
-        except Task.DoesNotExist:
+        # Use filter+first instead of get to prevent MultipleObjectsReturned
+        task_session = Task.objects.filter(
+            user=request.user, module='listening', question=task_id
+        ).order_by('-created_at').first()
+
+        if not task_session:
             return Response({
                 'success': False,
                 'message': 'Test session not found'
             }, status=status.HTTP_404_NOT_FOUND)
+
+        # Clean up any other duplicate tasks for same question
+        Task.objects.filter(
+            user=request.user, module='listening', question=task_id
+        ).exclude(id=task_session.id).delete()
+
+        task_session.completed = True
+        task_session.save()
 
         if isinstance(answers, list):
             merged = {}

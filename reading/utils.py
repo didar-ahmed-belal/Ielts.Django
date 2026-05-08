@@ -4,6 +4,23 @@ from django.db.models import Count
 import os
 import json
 from openai import OpenAI
+import re
+
+def _clean_and_parse_json(raw: str) -> dict:
+    """Robustly parse AI JSON responses that may include markdown fences or trailing commas."""
+    text = raw.strip()
+    # Strip markdown code fences
+    if text.startswith('```'):
+        lines = text.split('\n')
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:] if lines[0].startswith('```') else lines
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+    # Remove trailing commas before } or ] (common AI mistake)
+    text = re.sub(r',\s*(\}|\])', r'\1', text)
+    return json.loads(text)
+
 from others.models import Results
 
 
@@ -51,7 +68,7 @@ def get_result(set_id, answers):
     try:
         question_set = QuestionSet.objects.get(id=set_id)
     except QuestionSet.DoesNotExist:
-        return None
+        return {"error": "Question set not found", "score": 0.0}
 
     correct_answers = question_set.answers or {}
 
@@ -64,8 +81,19 @@ def get_result(set_id, answers):
     per_question_detail = []
 
     for q_num, correct_answer in correct_answers.items():
-        user_answer = answers.get(str(q_num))
+        raw_user_answer = answers.get(str(q_num))
         is_correct  = False
+
+        # Normalize blank/None answers at code level — never send ambiguous None to AI
+        if raw_user_answer is None or (isinstance(raw_user_answer, str) and not raw_user_answer.strip()):
+            user_answer = None  # Keep None for scoring logic
+            display_answer = "[NO ANSWER PROVIDED]"
+        elif isinstance(raw_user_answer, (list, dict)):
+            user_answer = raw_user_answer
+            display_answer = str(raw_user_answer)
+        else:
+            user_answer = raw_user_answer
+            display_answer = str(raw_user_answer).strip()
 
         if isinstance(correct_answer, list):
             if isinstance(user_answer, list):
@@ -97,7 +125,7 @@ def get_result(set_id, answers):
         per_question_detail.append({
             'question_number': q_num,
             'correct_answer' : correct_answer,
-            'user_answer'    : user_answer,
+            'user_answer'    : display_answer,
             'is_correct'     : is_correct,
         })
 
@@ -124,7 +152,8 @@ def get_result(set_id, answers):
 
     overall_band = raw_to_band(raw_score, total_questions)
 
-    # ── 4. Build Gemini prompt ────────────────────────────────────────────────
+    # ── 4. Build prompt — blank answers already normalized to "[NO ANSWER PROVIDED]"
+    unanswered = sum(1 for item in per_question_detail if item['user_answer'] == "[NO ANSWER PROVIDED]")
     summary_lines = []
     for item in per_question_detail:
         status_str = "✓ Correct" if item['is_correct'] else "✗ Wrong"
@@ -138,15 +167,20 @@ def get_result(set_id, answers):
 You are an expert IELTS Reading examiner. A student has just completed an IELTS Reading test.
 
 Test Statistics:
-- Total Questions : {total_questions}
-- Correct Answers : {correct_count}
-- Accuracy        : {accuracy_pct:.1f}%
-- Estimated Band  : {overall_band}
+- Total Questions  : {total_questions}
+- Correct Answers  : {correct_count}
+- Unanswered       : {unanswered}
+- Accuracy         : {accuracy_pct:.1f}%
+- Estimated Band   : {overall_band}
 
-Per-question breakdown:
+Per-question breakdown (answers labeled "[NO ANSWER PROVIDED]" mean the student left that question completely blank):
 {performance_summary}
 
-Based on the above data, generate a structured JSON feedback report. 
+RULES — follow these strictly:
+1. Any question showing "[NO ANSWER PROVIDED]" means the student gave NO answer. Report it as unanswered. Do NOT invent or guess what the student might have written.
+2. Only base your feedback on what is literally shown above. Do not assume, hallucinate, or fill in missing answers.
+3. Scores must reflect the actual results above — do not inflate or deflate.
+
 Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 
 {{
@@ -167,7 +201,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
     "<area 2>",
     "<area 3>"
   ],
-  "performance_breakdown": "<2-3 sentence overall summary of the student's reading performance>"
+  "performance_breakdown": "<2-3 sentence honest summary. Mention unanswered questions explicitly if any>"
 }}
 """
 
@@ -187,7 +221,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
             response_format={ "type": "json_object" }
         )
         raw_text = response.choices[0].message.content.strip()
-        feedback = json.loads(raw_text)
+        feedback = _clean_and_parse_json(response.choices[0].message.content)
 
     except Exception as e:
         print("Gemini API error in reading get_result:", e)

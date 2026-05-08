@@ -29,43 +29,56 @@ class GenerateSpeakingSessionView(views.APIView):
                     "message": f"You have completed {limit} free speaking tasks. Please upgrade your plan to continue."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            task = Task.objects.get(user=request.user, module='speaking', completed=False)
-            session = QuestionSet.objects.get(id=task.question)
-            time = (session.start + session.duration) - timezone.now()
-            total_seconds = int(time.total_seconds())
-            if total_seconds <= 0:
-                duration_str = "00:00:00"
-            else:
-                hours, remainder = divmod(total_seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        # Clean up any duplicate incomplete tasks (safety net)
+        tasks = Task.objects.filter(user=request.user, module='speaking', completed=False)
+        task_count = tasks.count()
+        if task_count > 1:
+            latest = tasks.order_by('-created_at').first()
+            tasks.exclude(id=latest.id).delete()
+            task = latest
+        elif task_count == 1:
+            task = tasks.first()
+        else:
+            task = None
 
-            return Response({
-                'status': True,
-                'session_id': str(session.id),
-                **session.questions,
-                'duration': duration_str,
-            })
-        except Task.DoesNotExist:
+        if task:
             try:
-                questions = generate_speaking_questions()
-
-                session = QuestionSet.objects.create(questions=questions)
-                
-                Task.objects.create(user=request.user, module='speaking', question=session.id, completed=False)
+                session = QuestionSet.objects.get(id=task.question)
+                time = (session.start + session.duration) - timezone.now()
+                total_seconds = int(time.total_seconds())
+                if total_seconds <= 0:
+                    duration_str = "00:00:00"
+                else:
+                    hours, remainder = divmod(total_seconds, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
                 return Response({
                     'status': True,
                     'session_id': str(session.id),
-                    **questions,
-                    'duration': "00:14:00",  # default speaking time
+                    **session.questions,
+                    'duration': duration_str,
                 })
-            except Exception as e:
-                return Response(
-                    {'status': False, 'error': str(e)},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+            except QuestionSet.DoesNotExist:
+                # Underlying session deleted — fall through to create a new one
+                task.delete()
+
+        # No valid active task — create a brand-new speaking session
+        try:
+            questions = generate_speaking_questions()
+            session = QuestionSet.objects.create(questions=questions)
+            Task.objects.create(user=request.user, module='speaking', question=session.id, completed=False)
+            return Response({
+                'status': True,
+                'session_id': str(session.id),
+                **questions,
+                'duration': "00:14:00",
+            })
+        except Exception as e:
+            return Response(
+                {'status': False, 'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 
@@ -82,18 +95,10 @@ class SpeakingResultView(views.APIView):
         part3_audio = data.get('audio3')
         session_id  = data.get('session')
 
-        # Validation
-        missing = [
-            k for k, v in {
-                'part1_audio': part1_audio,
-                'part2_audio': part2_audio,
-                'part3_audio': part3_audio,
-                'session_id':  session_id,
-            }.items() if not v
-        ]
-        if missing:
+        # Only session_id is required; audio parts are optional
+        if not session_id:
             return Response(
-                {'status': False, 'error': f'Missing fields: {", ".join(missing)}'},
+                {'status': False, 'error': 'Missing field: session_id'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -101,12 +106,17 @@ class SpeakingResultView(views.APIView):
         try:
             question_set = QuestionSet.objects.get(id=session_id)
             questions = question_set.questions
-            with transaction.atomic():
-                SpeakingAnswer.objects.bulk_create([
-                    SpeakingAnswer(session=question_set, part=1, audio=part1_audio),
-                    SpeakingAnswer(session=question_set, part=2, audio=part2_audio),
-                    SpeakingAnswer(session=question_set, part=3, audio=part3_audio),
-                ])
+            # Only save answers for parts where audio was actually provided
+            answers_to_create = []
+            if part1_audio:
+                answers_to_create.append(SpeakingAnswer(session=question_set, part=1, audio=part1_audio))
+            if part2_audio:
+                answers_to_create.append(SpeakingAnswer(session=question_set, part=2, audio=part2_audio))
+            if part3_audio:
+                answers_to_create.append(SpeakingAnswer(session=question_set, part=3, audio=part3_audio))
+            if answers_to_create:
+                with transaction.atomic():
+                    SpeakingAnswer.objects.bulk_create(answers_to_create)
 
         except QuestionSet.DoesNotExist:
             return Response(
@@ -114,25 +124,41 @@ class SpeakingResultView(views.APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        try:
-            task = Task.objects.get(user=request.user, module='speaking', question=session_id)
+        # Use filter+first instead of get to prevent MultipleObjectsReturned
+        task = Task.objects.filter(
+            user=request.user, module='speaking', question=session_id
+        ).order_by('-created_at').first()
 
-            task.completed = True
-            task.save()
-        except Task.DoesNotExist:
+        if not task:
             return Response(
                 {'status': False, 'error': 'Speaking task session not found'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Transcribe all 3 audio files in parallel (~3× faster)
+        # Clean up any duplicate tasks for the same question
+        Task.objects.filter(
+            user=request.user, module='speaking', question=session_id
+        ).exclude(id=task.id).delete()
+
+        task.completed = True
+        task.save()
+
+        # Transcribe only audio parts that were provided; use placeholder for missing ones
+        NO_ANSWER = "[NO ANSWER PROVIDED]"
         with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                executor.submit(get_transcript, part1_audio): 'part1',
-                executor.submit(get_transcript, part2_audio): 'part2',
-                executor.submit(get_transcript, part3_audio): 'part3',
+            futures = {}
+            if part1_audio:
+                futures[executor.submit(get_transcript, part1_audio)] = 'part1'
+            if part2_audio:
+                futures[executor.submit(get_transcript, part2_audio)] = 'part2'
+            if part3_audio:
+                futures[executor.submit(get_transcript, part3_audio)] = 'part3'
+
+            transcripts = {
+                'part1': NO_ANSWER,
+                'part2': NO_ANSWER,
+                'part3': NO_ANSWER,
             }
-            transcripts = {}
             for future in as_completed(futures):
                 key = futures[future]
                 try:

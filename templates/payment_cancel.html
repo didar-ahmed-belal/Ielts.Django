@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Cancelled</title>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f9fafb;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            padding: 48px 40px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        .icon-wrapper {
+            width: 64px;
+            height: 64px;
+            background-color: #fee2e2;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+        .icon {
+            color: #ef4444;
+            width: 32px;
+            height: 32px;
+        }
+        h1 {
+            color: #111827;
+            font-size: 24px;
+            margin: 0 0 16px 0;
+            font-weight: 600;
+        }
+        p {
+            color: #4b5563;
+            font-size: 15px;
+            line-height: 1.6;
+            margin: 0 0 32px 0;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #2563eb;
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 15px;
+            transition: all 0.2s;
+            width: 100%;
+            box-sizing: border-box;
+            border: none;
+            cursor: pointer;
+        }
+        .btn:hover {
+            background-color: #1d4ed8;
+            box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon-wrapper">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+        </div>
+        <h1>Payment Cancelled</h1>
+        <p>Your payment process was cancelled and no charges were made. You can safely return to your dashboard.</p>
+        <a href="{{ frontend_url }}/dashboard" class="btn">Return to Dashboard</a>
+    </div>
+</body>
+</html>

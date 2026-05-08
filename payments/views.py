@@ -1,6 +1,4 @@
-import stripe
-import json
-from django.conf import settings
+import os,json,stripe
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
@@ -11,10 +9,15 @@ from .models import Payments
 from subscriptions.models import Plan, Subscriptions
 from .serializers import PaymentSerializer
 from .helper import create_checkout_session
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.shortcuts import redirect, render
+from django.conf import settings
+
 
 # Create your views here.
 
 class GetPaymentLinkView(APIView):
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
         plan_id = request.query_params.get("plan")
@@ -54,15 +57,14 @@ class GetPaymentLinkView(APIView):
                 "error": str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
 
-class PaymentSuccessView(APIView):
-    permission_classes = []
-    def get(self, request):
-        return Response({"message": "Payment successful! Your subscription is activated."})
 
 class PaymentCancelView(APIView):
-    permission_classes = []
+    permission_classes = [AllowAny]
     def get(self, request):
-        return Response({"message": "Payment cancelled."})
+        context = {
+            'frontend_url': os.getenv('FRONTEND_URL')
+        }
+        return render(request, 'payment_cancel.html', context)
 
 
 
@@ -205,3 +207,47 @@ class StripeWebhookView(APIView):
             print(f"Ignoring event type: {event['type']}")
 
         return HttpResponse(status=status.HTTP_200_OK)
+
+
+
+
+class PaymentSuccessView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        payment_id = request.query_params.get('id')
+        print("Payment ID:", payment_id)
+        try:
+            payment = Payments.objects.get(id=payment_id)
+        except Payments.DoesNotExist:
+            return Response({"error": "Payment not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+        if payment.invoice:
+            return redirect(payment.invoice)
+            
+        # Try to fetch invoice URL from Stripe if webhook is slow
+        session_id = request.query_params.get('session_id') or payment.tnxid
+        if session_id and session_id.startswith('cs_'):
+            
+            try:
+                stripe.api_key = settings.STRIPE_SECRET_KEY
+                session = stripe.checkout.Session.retrieve(session_id)
+                if session.payment_status == 'paid':
+                    payment.status = 'paid'
+                    if not payment.tnxid:
+                        payment.tnxid = session_id
+
+                if session.invoice:
+                    invoice = stripe.Invoice.retrieve(session.invoice)
+                    if invoice.hosted_invoice_url:
+                        payment.invoice = invoice.hosted_invoice_url
+                        payment.save()
+                        return redirect(payment.invoice)
+                
+                # Save just in case status changed but invoice wasn't found (rare)
+                payment.save()
+            except Exception as e:
+                print(f"Error fetching invoice in success view: {e}")
+
+        # Fallback if invoice is not ready yet
+        return redirect(f"{os.getenv('FRONTEND_URL')}/dashboard")

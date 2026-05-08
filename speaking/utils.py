@@ -2,6 +2,23 @@ import os
 import json
 import base64
 from openai import OpenAI
+import re
+
+def _clean_and_parse_json(raw: str) -> dict:
+    """Robustly parse AI JSON responses that may include markdown fences or trailing commas."""
+    text = raw.strip()
+    # Strip markdown code fences
+    if text.startswith('```'):
+        lines = text.split('\n')
+        # Remove first line (```json or ```) and last line (```)
+        lines = lines[1:] if lines[0].startswith('```') else lines
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+    # Remove trailing commas before } or ] (common AI mistake)
+    text = re.sub(r',\s*(\}|\])', r'\1', text)
+    return json.loads(text)
+
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
 
@@ -62,14 +79,7 @@ def generate_speaking_questions() -> dict:
     """
 
     raw = get_openrouter_response(prompt)
-    # Strip markdown code fences if present
-    if raw.startswith('```'):
-        raw = raw.split('```')[1]
-        if raw.startswith('json'):
-            raw = raw[4:]
-        raw = raw.strip()
-
-    return json.loads(raw)
+    return _clean_and_parse_json(raw)
 
 
 
@@ -153,6 +163,18 @@ def get_result(part1_transcript: str, part2_transcript: str, part3_transcript: s
     p2_pts = '\n'.join(f'- {pt}' for pt in p2.get('points_to_cover', []))
     p3_qs = '\n'.join(f'- {q}' for q in p3.get('questions', []))
 
+    # Normalize blank/None transcripts at code level
+    def normalize_transcript(t):
+        if not t or not str(t).strip() or str(t).strip().lower() in ('none', 'null', ''):
+            return "[NO ANSWER PROVIDED]"
+        return str(t).strip()
+
+    p1_text = normalize_transcript(part1_transcript)
+    p2_text = normalize_transcript(part2_transcript)
+    p3_text = normalize_transcript(part3_transcript)
+
+    blank_parts = [p for p, t in [("Part 1", p1_text), ("Part 2", p2_text), ("Part 3", p3_text)] if t == "[NO ANSWER PROVIDED]"]
+
     prompt = f"""
 You are an official IELTS Speaking examiner. Evaluate the candidate's responses across all 3 parts.
 
@@ -160,20 +182,25 @@ You are an official IELTS Speaking examiner. Evaluate the candidate's responses 
 Questions asked:
 {p1_qs}
 Candidate's combined response:
-{part1_transcript}
+{p1_text}
 
 === PART 2 — Long Turn (Cue Card) ===
 Cue card: {p2_cue}
 Points to cover:
 {p2_pts}
 Candidate's response:
-{part2_transcript}
+{p2_text}
 
 === PART 3 — Two-way Discussion ===
 Discussion questions:
 {p3_qs}
 Candidate's combined response:
-{part3_transcript}
+{p3_text}
+
+RULES — follow these strictly:
+1. Any part showing "[NO ANSWER PROVIDED]" means the candidate gave NO spoken response. You MUST score that part 0 and state clearly in part_feedback that no response was provided. Do NOT fabricate or imagine any response.
+2. Only evaluate what is literally shown above.
+3. Overall band must honestly reflect all parts including any unanswered ones.
 
 Evaluate strictly using the 4 official IELTS Speaking band descriptors:
 1. Fluency & Coherence
@@ -203,12 +230,4 @@ Respond ONLY with a valid JSON object (no markdown, no extra text):
 """
 
     raw = get_openrouter_response(prompt).strip()
-
-    # Strip markdown code fences if Gemini wraps in ```json ... ```
-    if raw.startswith('```'):
-        raw = raw.split('```')[1]
-        if raw.startswith('json'):
-            raw = raw[4:]
-        raw = raw.strip()
-
-    return json.loads(raw)
+    return _clean_and_parse_json(raw)

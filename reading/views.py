@@ -41,25 +41,39 @@ class ReadingPassageListView(views.APIView):
                     "status": False,
                     "message": f"You have completed {limit} free reading tasks. Please upgrade your plan to continue."
                 }, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            task = Task.objects.get(user=request.user, module='reading', completed=False)
-            question_set = QuestionSet.objects.get(id=task.question)
-            serializer = QuestionSetSerializer(question_set, context={'task': task})
-            return Response({
-                'success': True,
-                'message': 'Reading test session created successfully',
-                'data': serializer.data
-            })
-        except Task.DoesNotExist:
-            question_set = create_question_set()
-            serializer = QuestionSetSerializer(question_set)
-            Task.objects.create(user=request.user, module='reading', question=question_set.id, completed=False)
-            return Response({
-                'success': True,
-                'message': 'Reading test session created successfully',
-                'data': serializer.data
-            })
+        # Clean up any duplicate incomplete tasks (safety net)
+        tasks = Task.objects.filter(user=request.user, module='reading', completed=False)
+        task_count = tasks.count()
+        if task_count > 1:
+            latest = tasks.order_by('-created_at').first()
+            tasks.exclude(id=latest.id).delete()
+            task = latest
+        elif task_count == 1:
+            task = tasks.first()
+        else:
+            task = None
 
+        if task:
+            try:
+                question_set = QuestionSet.objects.get(id=task.question)
+                serializer = QuestionSetSerializer(question_set, context={'task': task})
+                return Response({
+                    'success': True,
+                    'message': 'Reading test session created successfully',
+                    'data': serializer.data
+                })
+            except QuestionSet.DoesNotExist:
+                task.delete()
+
+        # No valid task — create a new reading session
+        question_set = create_question_set()
+        serializer = QuestionSetSerializer(question_set)
+        Task.objects.create(user=request.user, module='reading', question=question_set.id, completed=False)
+        return Response({
+            'success': True,
+            'message': 'Reading test session created successfully',
+            'data': serializer.data
+        })
 
 
 class ReadingQuestionAnswerSubmitView(views.APIView):
@@ -87,18 +101,25 @@ class ReadingQuestionAnswerSubmitView(views.APIView):
                 'data': None
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            task = Task.objects.get(user=request.user, module='reading', question=set_id)
+        # Use filter+first instead of get to prevent MultipleObjectsReturned
+        task = Task.objects.filter(
+            user=request.user, module='reading', question=set_id
+        ).order_by('-created_at').first()
 
-            task.completed = True
-            task.save()
-
-        except Task.DoesNotExist:
+        if not task:
             return Response({
                 'success': False,
                 'log': 'Test not found',
                 'data': None
             }, status=status.HTTP_404_NOT_FOUND)
+
+        # Clean up duplicates
+        Task.objects.filter(
+            user=request.user, module='reading', question=set_id
+        ).exclude(id=task.id).delete()
+
+        task.completed = True
+        task.save()
 
         if isinstance(answers, list):
             merged = {}
