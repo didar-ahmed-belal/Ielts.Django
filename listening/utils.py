@@ -20,6 +20,35 @@ def _clean_and_parse_json(raw: str) -> dict:
     text = re.sub(r',\s*(\}|\])', r'\1', text)
     return json.loads(text)
 
+
+def _normalize_user_answer(raw_user_answer):
+    if raw_user_answer is None:
+        return None, "[NO ANSWER PROVIDED]"
+    if isinstance(raw_user_answer, str):
+        cleaned = raw_user_answer.strip()
+        return (None, "[NO ANSWER PROVIDED]") if not cleaned else (cleaned, cleaned)
+    if isinstance(raw_user_answer, list):
+        normalized = []
+        for item in raw_user_answer:
+            item_value, _ = _normalize_user_answer(item)
+            if item_value is not None:
+                normalized.append(item_value)
+        if not normalized:
+            return None, "[NO ANSWER PROVIDED]"
+        return normalized, str(normalized)
+    if isinstance(raw_user_answer, dict):
+        normalized = {}
+        for key, value in raw_user_answer.items():
+            item_value, _ = _normalize_user_answer(value)
+            if item_value is not None:
+                normalized[key] = item_value
+        if not normalized:
+            return None, "[NO ANSWER PROVIDED]"
+        return normalized, json.dumps(normalized, ensure_ascii=False)
+    cleaned = str(raw_user_answer).strip()
+    return (None, "[NO ANSWER PROVIDED]") if not cleaned else (raw_user_answer, cleaned)
+
+
 def get_result(task_id, answers):
     try:
         task = ListeningTask.objects.get(id=task_id)
@@ -37,17 +66,7 @@ def get_result(task_id, answers):
         q_text = q_data.get('text', q_data.get('question', 'Unknown Question'))
         correct_answer = question.answer
         raw_user_answer = answers.get(q_num)
-
-        # Normalize blank/None answers at code level — never send ambiguous None to AI
-        if raw_user_answer is None or (isinstance(raw_user_answer, str) and not raw_user_answer.strip()):
-            user_answer = None  # Keep None for scoring logic
-            display_answer = "[NO ANSWER PROVIDED]"
-        elif isinstance(raw_user_answer, dict):
-            user_answer = raw_user_answer
-            display_answer = str(raw_user_answer)
-        else:
-            user_answer = raw_user_answer
-            display_answer = str(raw_user_answer).strip()
+        user_answer, display_answer = _normalize_user_answer(raw_user_answer)
 
         is_correct = False
         if isinstance(correct_answer, dict):

@@ -3,7 +3,7 @@ services:
     build: .
     container_name: web-i
     command: >
-      sh -c "python manage.py collectstatic --noinput && python manage.py makemigrations && python manage.py migrate && gunicorn core.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4"
+      sh -c "python manage.py collectstatic --noinput && python manage.py makemigrations && python manage.py migrate && gunicorn core.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4 --forwarded-allow-ips='*'"
     volumes:
       - .:/app
     expose:
@@ -19,7 +19,7 @@ services:
     image: nginx:stable
     container_name: nginx
     ports:
-      - "80:80"
+      - "8081:80"
       # - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
