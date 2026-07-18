@@ -14,7 +14,7 @@ if not User.objects.filter(email=email).exists():
     user = User.objects.create_superuser(
         email=email,
         password=password,
-        full_name='Admin User'
+        name='Admin User'
     )
     user.role = 'ADMIN'
     user.is_staff = True
