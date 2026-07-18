@@ -1,16 +1,19 @@
+
 services:
   web:
     build: .
-    container_name: web-i
-    command: >
-      sh -c "python manage.py collectstatic --noinput && python manage.py makemigrations && python manage.py migrate && gunicorn core.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4 --forwarded-allow-ips='*'"
-    volumes:
-      - .:/app
-    expose:
-      - "8000"
-    depends_on:
-      - redis # - db
-    environment:
-      - DJANGO_SETTINGS_MODULE=core.settings
+    ports:
+      - "8000:8000"
     env_file:
       - .env
+    environment:
+      - REDIS_URL=env.REDIS_URL
+    depends_on:
+      - redis
+
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
