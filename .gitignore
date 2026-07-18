@@ -31,10 +31,6 @@ staticfiles/
 media/
 local_settings.py
 
-# Migrations (optional, keep if you want versioned migrations)
-*/migrations/*
-!*/migrations/__init__.py
-
 # Byte-compiled / cache
 *.pyc
 *.pyo
