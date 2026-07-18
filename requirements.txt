@@ -39,3 +39,4 @@ openai
 
 # PDF generation
 reportlab
+daphne==4.2.1
