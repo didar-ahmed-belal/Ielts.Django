@@ -188,7 +188,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation ou
             })
 
         response = client.chat.completions.create(
-            model="google/gemini-2.0-flash-001",
+            model=os.getenv("OPENROUTER_MODEL", "gpt-4o-mini"),
             messages=[
                 {
                     "role": "user",

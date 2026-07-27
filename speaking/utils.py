@@ -21,6 +21,7 @@ def _clean_and_parse_json(raw: str) -> dict:
 
 
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'gpt-4o-mini')
 
 def get_client():
     return OpenAI(
@@ -28,11 +29,11 @@ def get_client():
         api_key=OPENROUTER_API_KEY,
     )
 
-def get_openrouter_response(prompt: str, model: str = "google/gemini-2.0-flash-001") -> str:
+def get_openrouter_response(prompt: str, model: str = None) -> str:
     """Helper to call OpenRouter API using OpenAI client"""
     client = get_client()
     response = client.chat.completions.create(
-        model=model,
+        model=model or OPENROUTER_MODEL,
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
@@ -104,7 +105,7 @@ def get_transcript(file) -> str:
     try:
         client = get_client()
         response = client.chat.completions.create(
-            model="google/gemini-2.0-flash-001",
+            model=OPENROUTER_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -217,7 +218,7 @@ Return ONLY a JSON object:
     try:
         client = get_client()
         response = client.chat.completions.create(
-            model="google/gemini-2.0-flash-001",
+            model=OPENROUTER_MODEL,
             messages=[{"role": "user", "content": messages_content}],
             response_format={ "type": "json_object" }
         )

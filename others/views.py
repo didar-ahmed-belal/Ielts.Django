@@ -605,7 +605,7 @@ class AIFeedbackView(views.APIView):
             client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
             
             response = client.chat.completions.create(
-                model="google/gemini-2.0-flash-001",
+                model=os.getenv("OPENROUTER_MODEL", "gpt-4o-mini"),
                 messages=[{"role": "user", "content": prompt}],
                 response_format={ "type": "json_object" }
             )
