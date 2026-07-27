@@ -11,6 +11,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from subscriptions.serializers import *
 from payments.serializers import PaymentSerializer
 from payments.models import Payments
+from rest_framework import generics, status, permissions
+from rest_framework.response import Response
 
 # Create your views here.
 
@@ -145,3 +147,53 @@ class GetProfileView(APIView):
         history = PaymentSerializer(history, many=True).data
         return Response({"status": True, "log": user, "plan": plan, "history": history}, status=200)
 
+
+class ForgotPasswordCreateView(generics.CreateAPIView):
+    serializer_class = ForgotPasswordSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        user = User.objects.filter(email=email).first()
+        if user:
+            # Generate OTP and send email
+            res = send_otp(email, task='forgot_password')
+            if res['status']:
+                return Response({"status": True, "log": "OTP sent to your email."}, status=status.HTTP_200_OK)
+            else:
+                return Response({"status": False, "log": res['log']}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response({"status": False, "log": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ForgotPasswordVerifyView(generics.CreateAPIView):
+    serializer_class = ForgotPasswordVerifySerializer
+    permission_classes = [permissions.AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        otp_code = request.data.get('otp_code')
+        new_password = request.data.get('new_password')
+
+        if not otp_code or not new_password:
+            return Response({"status": False, "log": "OTP code and new password are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = verify_otp(email, otp_code)
+
+        if not result['status']:
+            return Response({"status": False, "log": result['log']}, status=status.HTTP_400_BAD_REQUEST)
+
+        if result['status']:
+            try:
+                user = User.objects.get(email=email)
+                user.set_password(new_password)
+                user.save()
+                return Response({"status": True, "log": "Password reset successfully."}, status=status.HTTP_200_OK)
+            except User.DoesNotExist:
+                return Response({"status": False, "log": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response({"status": False, "log": result['log']}, status=status.HTTP_400_BAD_REQUEST)
