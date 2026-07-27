@@ -4,6 +4,12 @@ from .models import OTP, User
 from django.core.mail import send_mail
 from django.conf import settings
 import json
+from django.utils.text import slugify
+import requests
+from django.core.files.base import ContentFile
+from django.contrib.auth.hashers import make_password
+from rest_framework.response import Response
+
 
 def send_otp(email, task="verification"):
     try:

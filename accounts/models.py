@@ -46,6 +46,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     date_joined = models.DateTimeField(auto_now_add=True, verbose_name="Joining Date")
     block = models.BooleanField(default=False,verbose_name="Suspend User")
 
+    is_forgot = models.BooleanField(default=False,verbose_name="Forgot Password")
+
     objects = UserManager()
     class Meta:
         verbose_name = 'User'

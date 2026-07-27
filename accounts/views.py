@@ -116,6 +116,8 @@ class ResetPassword(APIView):
         email = request.data.get('email')
         new_password = request.data.get('new_password')
 
+
+
         if not email or not new_password :
             return Response(
                 {"error": "Email and new password are required."},
@@ -130,6 +132,8 @@ class ResetPassword(APIView):
         try:
             user = User.objects.get(email=email)
             user.set_password(new_password)
+            if user.is_forgot:
+                user.is_forgot = False
             user.save()
             return Response({"status": True, "log": "Password reset successfully"}, status=200)
         except User.DoesNotExist:
@@ -177,11 +181,6 @@ class ForgotPasswordVerifyView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data['email']
         otp_code = request.data.get('otp_code')
-        new_password = request.data.get('new_password')
-
-        if not otp_code or not new_password:
-            return Response({"status": False, "log": "OTP code and new password are required."}, status=status.HTTP_400_BAD_REQUEST)
-
         result = verify_otp(email, otp_code)
 
         if not result['status']:
@@ -192,6 +191,8 @@ class ForgotPasswordVerifyView(generics.CreateAPIView):
                 user = User.objects.get(email=email)
                 user.set_password(new_password)
                 token = RefreshToken.for_user(user)
+
+                user.is_forgot = True
 
                 user.save()
                 return Response({"status": True, "log": "Password reset successfully.", "access": str(token.access_token), "refresh": str(token.refresh_token) }, status=status.HTTP_200_OK)
