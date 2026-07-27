@@ -191,8 +191,10 @@ class ForgotPasswordVerifyView(generics.CreateAPIView):
             try:
                 user = User.objects.get(email=email)
                 user.set_password(new_password)
+                token = RefreshToken.for_user(user)
+
                 user.save()
-                return Response({"status": True, "log": "Password reset successfully."}, status=status.HTTP_200_OK)
+                return Response({"status": True, "log": "Password reset successfully.", "access": str(token.access_token), "refresh": str(token.refresh_token) }, status=status.HTTP_200_OK)
             except User.DoesNotExist:
                 return Response({"status": False, "log": "User not found."}, status=status.HTTP_404_NOT_FOUND)
         else:
