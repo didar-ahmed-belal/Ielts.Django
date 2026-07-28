@@ -179,24 +179,23 @@ class ForgotPasswordVerifyView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data['email']
-        otp_code = serializer.validated_data['otp_code']
+        email = serializer.validated_data["email"]
+        otp_code = serializer.validated_data["otp_code"]
         result = verify_otp(email, otp_code)
 
-        if not result['status']:
-            return Response({"status": False, "log": result['log']}, status=status.HTTP_400_BAD_REQUEST)
+        if not result["status"]:
+            return Response({"status": False, "log": result["log"]}, status=status.HTTP_400_BAD_REQUEST)
 
-        if result['status']:
-            try:
-                user = User.objects.get(email=email)
-                user.set_password(new_password)
-                token = RefreshToken.for_user(user)
-
-                user.is_forgot = True
-
-                user.save()
-                return Response({"status": True, "log": "Password reset successfully.", "access": str(token.access_token), "refresh": str(token.refresh_token) }, status=status.HTTP_200_OK)
-            except User.DoesNotExist:
-                return Response({"status": False, "log": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            return Response({"status": False, "log": result['log']}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(email=email)
+            token = RefreshToken.for_user(user)
+            user.is_forgot = True
+            user.save()
+            return Response({
+                "status": True,
+                "log": "OTP verified successfully.",
+                "refresh": str(token),
+                "access": str(token.access_token),
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"status": False, "log": "User not found."}, status=status.HTTP_404_NOT_FOUND)
