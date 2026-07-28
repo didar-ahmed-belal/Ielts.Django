@@ -90,6 +90,5 @@ class ForgotPasswordSerializer(serializers.Serializer):
 
 class ForgotPasswordVerifySerializer(serializers.Serializer):
     email = serializers.EmailField()
-    otp = serializers.CharField()
+    otp_code = serializers.CharField()
 
-    

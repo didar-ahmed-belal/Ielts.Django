@@ -180,7 +180,7 @@ class ForgotPasswordVerifyView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data['email']
-        otp_code = request.data.get('otp_code')
+        otp_code = serializer.validated_data['otp_code']
         result = verify_otp(email, otp_code)
 
         if not result['status']:

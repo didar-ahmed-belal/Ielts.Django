@@ -41,7 +41,7 @@ def verify_otp(email, otp_code):
         return {"status": False, "log": "OTP has expired."}
 
     # Verify OTP
-    if otp_obj.otp != otp_code:
+    if otp_obj.otp != str(otp_code).strip():
         return {"status": False, "log": "Invalid OTP."}
 
     # OTP verified, activate user & delete OTP
