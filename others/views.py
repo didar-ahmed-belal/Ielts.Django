@@ -659,7 +659,8 @@ class HomeData(views.APIView):
                 "writing_questions": w_count,
                 "speaking_questions": "Unlimited (AI Generated)",
                 "total_users": User.objects.count(),
-                "total_tests_taken": total_question_sets
+                "total_tests_taken": total_question_sets,
+                "total_review" : Results.objects.all().count()
             }
             
             return Response({
