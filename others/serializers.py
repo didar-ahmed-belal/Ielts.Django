@@ -56,3 +56,22 @@ class MockTaskSerializer(serializers.ModelSerializer):
                         item['image'] = full_url
                             
         return representation
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user_name = serializers.ReadOnlyField(source='user.name')
+    user_email = serializers.ReadOnlyField(source='user.email')
+    user_image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Review
+        fields = ['id', 'user', 'user_name', 'user_email', 'user_image', 'rating', 'comment', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
+
+    def get_user_image(self, obj):
+        request = self.context.get('request')
+        if obj.user and obj.user.image:
+            if request:
+                return request.build_absolute_uri(obj.user.image.url)
+            return obj.user.image.url
+        return None

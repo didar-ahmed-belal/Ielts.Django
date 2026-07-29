@@ -15,4 +15,6 @@ urlpatterns = [
     path('home-data/', HomeData.as_view(), name='home_data'),
     path('mock-task/', GetMockTask.as_view(), name='get_mock_task'),
     path('mock-task/submit/', MockTaskSubmitView.as_view(), name='submit_mock_task'),
+    path('reviews/', ReviewListCreateView.as_view(), name='review_list_create'),
+    path('reviews/<int:pk>/', ReviewDetailView.as_view(), name='review_detail'),
 ]

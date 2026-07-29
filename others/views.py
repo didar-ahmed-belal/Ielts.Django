@@ -247,19 +247,112 @@ class LeaderboardView(views.APIView):
             user_results = data.filter(user=user).order_by('created_at')
             cur = user_results.last()
             old = user_results.first()
+
+            user_review_obj = Review.objects.filter(user=user).order_by('-created_at').first()
+            if user_review_obj and user_review_obj.comment:
+                user_review_text = user_review_obj.comment
+            else:
+                user_review_text = review[index % len(review)]
+
             results.append({
                 "name": user.name or user.email,
                 "image": request.build_absolute_uri(user.image.url) if user.image else None,
                 "score_before": float(old.score) if old else 0.0,
                 "score_after": float(cur.score) if cur else 0.0,
                 "time": cur.created_at if cur else None,
-                "review": review[index % len(review)]
+                "review": user_review_text
             })
         
         return Response({
             "status": True,
             "log": results
         })
+
+
+
+class ReviewListCreateView(views.APIView):
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+    def get(self, request):
+        reviews = Review.objects.all().order_by('-created_at')
+        serializer = ReviewSerializer(reviews, many=True, context={'request': request})
+        return Response({
+            "status": True,
+            "data": serializer.data
+        })
+
+    def post(self, request):
+        serializer = ReviewSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(user=request.user)
+            return Response({
+                "status": True,
+                "message": "Review added successfully",
+                "data": serializer.data
+            }, status=status.HTTP_201_CREATED)
+        return Response({
+            "status": False,
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ReviewDetailView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self, pk, user):
+        try:
+            return Review.objects.get(pk=pk, user=user)
+        except Review.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        try:
+            review = Review.objects.get(pk=pk)
+            serializer = ReviewSerializer(review, context={'request': request})
+            return Response({
+                "status": True,
+                "data": serializer.data
+            })
+        except Review.DoesNotExist:
+            return Response({
+                "status": False,
+                "message": "Review not found"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request, pk):
+        review = self.get_object(pk, request.user)
+        if not review:
+            return Response({
+                "status": False,
+                "message": "Review not found or unauthorized"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ReviewSerializer(review, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "status": True,
+                "message": "Review updated successfully",
+                "data": serializer.data
+            })
+        return Response({
+            "status": False,
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        review = self.get_object(pk, request.user)
+        if not review:
+            return Response({
+                "status": False,
+                "message": "Review not found or unauthorized"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        review.delete()
+        return Response({
+            "status": True,
+            "message": "Review deleted successfully"
+        }, status=status.HTTP_200_OK)
 
 
 class DetailedFeedbackView(views.APIView):
@@ -640,7 +733,6 @@ class AIFeedbackView(views.APIView):
 
 
 
-
 class HomeData(views.APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request):
@@ -660,7 +752,7 @@ class HomeData(views.APIView):
                 "speaking_questions": "Unlimited (AI Generated)",
                 "total_users": User.objects.count(),
                 "total_tests_taken": total_question_sets,
-                "total_review" : Results.objects.all().count()
+                "total_review" : Review.objects.all().count()
             }
             
             return Response({
