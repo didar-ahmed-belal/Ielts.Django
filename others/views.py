@@ -26,6 +26,7 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 from reading.utils import create_question_set as reading_question_set
 from speaking.utils import generate_speaking_questions as speaking_question_set
+from subscriptions.models import Plan
 
 from listening.serializers import ListeningTaskSerializer
 from writing.serializers import WritingQuestionSerializer
