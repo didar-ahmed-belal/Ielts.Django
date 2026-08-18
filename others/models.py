@@ -78,6 +78,18 @@ class Results(models.Model):
         return Results.objects.filter(user=self.user, type=module).count()
 
 
+class MockTaskCounter(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mock_task_counter')
+    l_set = models.JSONField(blank=True, null=True)
+    r_set = models.JSONField(blank=True, null=True)
+    w_set = models.JSONField(blank=True, null=True)
+    s_set = models.JSONField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.user.email
+
 
 class Messages(models.Model):
     name = models.CharField(max_length=100)

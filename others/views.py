@@ -851,31 +851,87 @@ class GetMockTask(views.APIView):
             mock_task = MockTask.objects.filter(user=request.user, completed=False).first()
 
             if not mock_task:
-                # 1. Listening
-                l_instance = ListeningTask.objects.order_by('?').first()
-                l_data = ListeningTaskSerializer(l_instance,context={'request': request}).data if l_instance else None
-                
-                # 2. Reading
-                r_instance = reading_question_set()
-                r_data = ReadingQuestionSetSerializer(r_instance,context={'request': request}).data if r_instance else None
-                
-                # 3. Writing
-                queryset = WritingQuestion.objects.all()
-                task1 = queryset.filter(level=1).order_by('?').first()
-                task2 = queryset.filter(level=2).order_by('?').first()
-                w_questions = [q for q in [task1, task2] if q is not None]
-                w_data = WritingQuestionSerializer(w_questions, many=True,context={'request': request}).data
-                
-                # 4. Speaking
-                s_data = speaking_question_set()
+                # Plan check
+                plan = request.user.subscriptions.filter(active=True).first()
+                is_free = not plan or plan.plan.name == "free"
 
-                mock_task = MockTask.objects.create(
-                    user=request.user,
-                    l_set=l_data,
-                    r_set=r_data,
-                    w_set=w_data,
-                    s_set=s_data,
-                )
+                if is_free:
+                    mock_counters = MockTaskCounter.objects.filter(user=request.user).order_by('created_at')
+                    count = mock_counters.count()
+
+                    if count < 4:
+                        # 1. Listening
+                        l_instance = ListeningTask.objects.order_by('?').first()
+                        l_data = ListeningTaskSerializer(l_instance,context={'request': request}).data if l_instance else None
+                        
+                        # 2. Reading
+                        r_instance = reading_question_set()
+                        r_data = ReadingQuestionSetSerializer(r_instance,context={'request': request}).data if r_instance else None
+                        
+                        # 3. Writing
+                        queryset = WritingQuestion.objects.all()
+                        task1 = queryset.filter(level=1).order_by('?').first()
+                        task2 = queryset.filter(level=2).order_by('?').first()
+                        w_questions = [q for q in [task1, task2] if q is not None]
+                        w_data = WritingQuestionSerializer(w_questions, many=True,context={'request': request}).data
+                        
+                        # 4. Speaking
+                        s_data = speaking_question_set()
+
+                        # Save unique mock set to MockTaskCounter
+                        MockTaskCounter.objects.create(
+                            user=request.user,
+                            l_set=l_data,
+                            r_set=r_data,
+                            w_set=w_data,
+                            s_set=s_data,
+                        )
+
+                        mock_task = MockTask.objects.create(
+                            user=request.user,
+                            l_set=l_data,
+                            r_set=r_data,
+                            w_set=w_data,
+                            s_set=s_data,
+                        )
+                    else:
+                        # Loop through existing 4 mock sets
+                        total_mocks = MockTask.objects.filter(user=request.user).count()
+                        selected_counter = mock_counters[total_mocks % 4]
+
+                        mock_task = MockTask.objects.create(
+                            user=request.user,
+                            l_set=selected_counter.l_set,
+                            r_set=selected_counter.r_set,
+                            w_set=selected_counter.w_set,
+                            s_set=selected_counter.s_set,
+                        )
+                else:
+                    # 1. Listening
+                    l_instance = ListeningTask.objects.order_by('?').first()
+                    l_data = ListeningTaskSerializer(l_instance,context={'request': request}).data if l_instance else None
+                    
+                    # 2. Reading
+                    r_instance = reading_question_set()
+                    r_data = ReadingQuestionSetSerializer(r_instance,context={'request': request}).data if r_instance else None
+                    
+                    # 3. Writing
+                    queryset = WritingQuestion.objects.all()
+                    task1 = queryset.filter(level=1).order_by('?').first()
+                    task2 = queryset.filter(level=2).order_by('?').first()
+                    w_questions = [q for q in [task1, task2] if q is not None]
+                    w_data = WritingQuestionSerializer(w_questions, many=True,context={'request': request}).data
+                    
+                    # 4. Speaking
+                    s_data = speaking_question_set()
+
+                    mock_task = MockTask.objects.create(
+                        user=request.user,
+                        l_set=l_data,
+                        r_set=r_data,
+                        w_set=w_data,
+                        s_set=s_data,
+                    )
 
             if not mock_task:
                 return Response({
